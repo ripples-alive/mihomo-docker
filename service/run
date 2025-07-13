@@ -1,0 +1,5 @@
+#!/bin/bash
+
+(sleep 1 && ./post-run) &
+
+/usr/bin/mihomo -d /etc/mihomo

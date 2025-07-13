@@ -1,0 +1,3 @@
+#!/bin/bash
+
+[ -f /etc/mihomo/meta-down ] && /etc/mihomo/meta-down

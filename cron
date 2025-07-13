@@ -1,0 +1,3 @@
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * root bash -c "[ -f /etc/mihomo/meta-check-restart ] && /etc/mihomo/meta-check-restart &>/proc/1/fd/1"

@@ -1,0 +1,7 @@
+#!/bin/sh
+
+MIHOMO_DIR=/etc/mihomo
+
+if [ -z "$(ls -A $MIHOMO_DIR)" ]; then
+    git clone https://github.com/ripples-alive/mihomo-proxy $MIHOMO_DIR
+fi

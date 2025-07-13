@@ -1,0 +1,17 @@
+#!/bin/bash
+
+cd /etc/mihomo
+
+# Make sure not initialized
+[ -f /etc/mihomo/meta-check ] && /etc/mihomo/meta-check && exit
+
+if [ -f /etc/mihomo/meta-env ]; then
+    # User may not exist in docker, so we need to create them
+    source /etc/mihomo/meta-env
+    for proxy_user_id in ${PROXY_USER_IDS[@]}
+    do
+        id $proxy_user_id 2>/dev/null || (useradd -u $proxy_user_id user$proxy_user_id && echo "user $proxy_user_id created")
+    done
+fi
+
+[ -f /etc/mihomo/meta-up ] && /etc/mihomo/meta-up
