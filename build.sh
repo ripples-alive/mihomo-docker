@@ -2,7 +2,7 @@
 
 NAME=mihomo
 BUILDER=${NAME}-builder
-MIHOMO_VERSION=1.19.11
+MIHOMO_VERSION=1.19.12
 
 docker buildx create --use --name $BUILDER
 docker buildx inspect --bootstrap
