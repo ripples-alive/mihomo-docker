@@ -4,8 +4,8 @@ This repository builds a Docker image for [MetaCubeX/mihomo](https://github.com/
 
 Images are published to GitHub Container Registry:
 
-- `ghcr.io/ripples-alive/mihomo:1.19.25`
-- `ghcr.io/ripples-alive/mihomo:1.19.25-compatible`
+- `ghcr.io/ripples-alive/mihomo:1.19.26`
+- `ghcr.io/ripples-alive/mihomo:1.19.26-compatible`
 - `ghcr.io/ripples-alive/mihomo:latest`
 
 The GHCR image name keeps the old Docker Hub image suffix from `ripples/mihomo`.
@@ -18,7 +18,7 @@ docker run --rm \
   --cap-add NET_ADMIN \
   --network host \
   -v /path/to/mihomo:/etc/mihomo \
-  ghcr.io/ripples-alive/mihomo:1.19.25
+  ghcr.io/ripples-alive/mihomo:1.19.26
 ```
 
 Use the compatible build when needed:
@@ -29,7 +29,7 @@ docker run --rm \
   --cap-add NET_ADMIN \
   --network host \
   -v /path/to/mihomo:/etc/mihomo \
-  ghcr.io/ripples-alive/mihomo:1.19.25-compatible
+  ghcr.io/ripples-alive/mihomo:1.19.26-compatible
 ```
 
 If `/etc/mihomo` is empty, the container initializes it from
@@ -37,16 +37,16 @@ If `/etc/mihomo` is empty, the container initializes it from
 
 ## Builds
 
-Local builds use `build.sh`, which pushes `ripples/mihomo:1.19.25` and
-`ripples/mihomo:1.19.25-compatible` to Docker Hub for `linux/amd64`.
+Local builds use `build.sh`, which pushes `ripples/mihomo:1.19.26` and
+`ripples/mihomo:1.19.26-compatible` to Docker Hub for `linux/amd64`.
 
 GitHub Actions builds the same Dockerfile with Buildx and publishes:
 
-- `ghcr.io/ripples-alive/mihomo:1.19.25`
-- `ghcr.io/ripples-alive/mihomo:1.19.25-compatible`
+- `ghcr.io/ripples-alive/mihomo:1.19.26`
+- `ghcr.io/ripples-alive/mihomo:1.19.26-compatible`
 - `ghcr.io/ripples-alive/mihomo:latest`
 
-Images are published on pushes to `main`, version tags such as `v1.19.25`, and
+Images are published on pushes to `main`, version tags such as `v1.19.26`, and
 manual `workflow_dispatch` runs. Pull requests build the images for validation
 but do not publish them.
 
