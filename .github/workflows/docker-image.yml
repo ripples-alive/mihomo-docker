@@ -49,7 +49,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: docker-image-${{ github.ref }}
+  group: docker-image-${{ github.ref }}-${{ inputs.invocation || github.event_name }}
   cancel-in-progress: true
 
 env:
