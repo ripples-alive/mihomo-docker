@@ -53,7 +53,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DEFAULT_MIHOMO_VERSION: "1.19.28"
+  DEFAULT_MIHOMO_VERSION: "1.19.31"
   IMAGE_NAME: ghcr.io/ripples-alive/mihomo
   PLATFORMS: linux/amd64
 
