@@ -1,0 +1,423 @@
+name: Update Mihomo stable release
+
+run-name: Check Mihomo stable release
+
+on:
+  schedule:
+    # GitHub schedules use UTC.  Avoid minute 0, which is a busy period.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: mihomo-stable-update
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: MetaCubeX/mihomo
+  IMAGE_NAME: ghcr.io/ripples-alive/mihomo
+  UPDATE_BRANCH: automation/mihomo-stable
+  UPDATE_MARKER: "<!-- automated-mihomo-stable-update -->"
+  GH_PROMPT_DISABLED: "1"
+
+jobs:
+  check:
+    name: Check upstream release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      current: ${{ steps.resolve.outputs.current }}
+      version: ${{ steps.resolve.outputs.version }}
+      update_needed: ${{ steps.resolve.outputs.update_needed }}
+      publish_needed: ${{ steps.resolve.outputs.publish_needed }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Resolve latest stable release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_file="$(mktemp)"
+          trap 'rm -f "$release_file"' EXIT
+          gh api \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/${UPSTREAM_REPOSITORY}/releases/latest" >"$release_file"
+
+          version="$(python3 - "$release_file" <<'PY'
+          import json
+          import re
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          if payload.get("draft") or payload.get("prerelease"):
+              raise SystemExit("latest release is draft or prerelease")
+          tag = payload.get("tag_name", "")
+          match = re.fullmatch(r"v(\d+\.\d+\.\d+)", tag)
+          if not match:
+              raise SystemExit(f"unsupported stable release tag: {tag!r}")
+          version = match.group(1)
+          names = {
+              asset.get("name")
+              for asset in payload.get("assets", [])
+              if asset.get("state") == "uploaded"
+          }
+          required = {
+              f"mihomo-linux-amd64-v{version}.gz",
+              f"mihomo-linux-amd64-compatible-v{version}.gz",
+          }
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit(
+                  "release assets are not ready: " + ", ".join(missing)
+              )
+          print(version)
+          PY
+          )"
+
+          current="$(python3 scripts/update-mihomo-version.py --current)"
+          update_needed="$(python3 - "$current" "$version" <<'PY'
+          import sys
+
+          current = tuple(int(part) for part in sys.argv[1].split("."))
+          candidate = tuple(int(part) for part in sys.argv[2].split("."))
+          if candidate < current:
+              raise SystemExit(
+                  f"refusing to follow a downgrade from {sys.argv[1]} to {sys.argv[2]}"
+              )
+          print("true" if candidate > current else "false")
+          PY
+          )"
+
+          publish_needed="$update_needed"
+          if [ "$update_needed" = "false" ]; then
+            image_state="$(python3 scripts/check-image-tags.py --image "$IMAGE_NAME" --version "$current")"
+            publish_needed="$(python3 -c 'import json, sys; print("true" if json.load(sys.stdin)["publish_needed"] else "false")' <<<"$image_state")"
+            {
+              echo "### Published image check"
+              echo '```json'
+              echo "$image_state"
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+          base_sha="$(git rev-parse HEAD)"
+          {
+            echo "current=${current}"
+            echo "version=${version}"
+            echo "update_needed=${update_needed}"
+            echo "publish_needed=${publish_needed}"
+            echo "base_sha=${base_sha}"
+          } >>"$GITHUB_OUTPUT"
+          echo "Current pinned version: ${current}" >>"$GITHUB_STEP_SUMMARY"
+          echo "Latest stable release: ${version}" >>"$GITHUB_STEP_SUMMARY"
+
+  validate:
+    name: Validate candidate image
+    needs: check
+    if: needs.check.outputs.update_needed == 'true'
+    uses: ./.github/workflows/docker-image.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+      push_image: false
+    permissions:
+      contents: read
+      packages: write
+
+  propose:
+    name: Create and merge version PR
+    needs:
+      - check
+      - validate
+    if: >-
+      always() &&
+      needs.check.outputs.update_needed == 'true' &&
+      needs.validate.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    outputs:
+      target_sha: ${{ steps.finalize.outputs.target_sha }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Prepare version branch
+        id: prepare
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --prune origin main
+          git checkout -B "${UPDATE_BRANCH}" origin/main
+          actual_current="$(python3 scripts/update-mihomo-version.py --current)"
+          candidate_parts="$(python3 - "$actual_current" "$VERSION" <<'PY'
+          import sys
+
+          current = tuple(int(part) for part in sys.argv[1].split("."))
+          candidate = tuple(int(part) for part in sys.argv[2].split("."))
+          if candidate < current:
+              raise SystemExit(
+                  f"main advanced beyond candidate {sys.argv[2]} (current {sys.argv[1]})"
+              )
+          print("equal" if candidate == current else "new")
+          PY
+          )"
+
+          if [ "$candidate_parts" = "equal" ]; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+            echo "target_sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          python3 scripts/update-mihomo-version.py --set "$VERSION"
+          git diff --check
+
+          expected_files="$(printf '%s\n' ".github/workflows/docker-image.yml" "build.sh" "README.md" | sort)"
+          actual_files="$(git diff --name-only | sort)"
+          if [ "$actual_files" != "$expected_files" ]; then
+            echo "unexpected version diff:" >&2
+            printf '%s\n' "$actual_files" >&2
+            exit 1
+          fi
+
+          git config user.name "ripples"
+          git config user.email "ripples.alive@outlook.com"
+          git add .github/workflows/docker-image.yml build.sh README.md
+          git diff --cached --check
+          git commit -m "chore: bump mihomo to ${VERSION}"
+
+          remote_sha="$(git ls-remote --heads origin "${UPDATE_BRANCH}" | awk '{print $1}')"
+          if [ -n "$remote_sha" ]; then
+            git push \
+              --force-with-lease="refs/heads/${UPDATE_BRANCH}:${remote_sha}" \
+              origin "HEAD:refs/heads/${UPDATE_BRANCH}"
+          else
+            git push origin "HEAD:refs/heads/${UPDATE_BRANCH}"
+          fi
+
+          echo "changed=true" >>"$GITHUB_OUTPUT"
+          echo "head_sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: Create or reuse update PR
+        id: pr
+        if: steps.prepare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+          HEAD_SHA: ${{ steps.prepare.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="chore: bump mihomo to ${VERSION}"
+          body="${UPDATE_MARKER}
+
+          Update the pinned Mihomo stable release to ${VERSION}.
+
+          The scheduled updater validated both amd64 release assets before opening this PR."
+
+          open_prs="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --state open \
+            --limit 100 \
+            --json number,title,headRefName,url)"
+          branch_pr="$(python3 - "$open_prs" "$UPDATE_BRANCH" <<'PY'
+          import json
+          import sys
+
+          branch = sys.argv[2]
+          for item in json.loads(sys.argv[1]):
+              if item.get("headRefName") == branch:
+                  print(item["number"])
+                  break
+          PY
+          )"
+          conflict="$(python3 - "$open_prs" "$title" "$UPDATE_BRANCH" <<'PY'
+          import json
+          import sys
+
+          title = sys.argv[2]
+          branch = sys.argv[3]
+          for item in json.loads(sys.argv[1]):
+              if item.get("title") == title and item.get("headRefName") != branch:
+                  print(f"#{item['number']} {item['url']}")
+          PY
+          )"
+          if [ -n "$conflict" ]; then
+            echo "an unrelated open PR already owns ${title}:" >&2
+            printf '%s\n' "$conflict" >&2
+            exit 1
+          fi
+
+          if [ -z "$branch_pr" ]; then
+            if ! pr_url="$(gh pr create \
+                --repo "$GITHUB_REPOSITORY" \
+                --base main \
+                --head "$UPDATE_BRANCH" \
+                --title "$title" \
+                --body "$body")"; then
+              echo "GitHub Actions could not create the update PR. Enable 'Allow GitHub Actions to create and approve pull requests' in repository Actions settings, then rerun." >&2
+              exit 1
+            fi
+            branch_pr="$(gh pr view "$pr_url" --json number --jq '.number')"
+          else
+            existing_body="$(gh pr view "$branch_pr" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')"
+            if ! grep -Fq "$UPDATE_MARKER" <<<"$existing_body"; then
+              echo "refusing to modify an unrelated PR on ${UPDATE_BRANCH}: #${branch_pr}" >&2
+              exit 1
+            fi
+            gh pr edit "$branch_pr" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body "$body"
+          fi
+
+          pr_json="$(gh pr view "$branch_pr" --repo "$GITHUB_REPOSITORY" --json baseRefName,headRefName,headRefOid,body,isCrossRepository)"
+          python3 - "$pr_json" "$HEAD_SHA" "$UPDATE_BRANCH" "$UPDATE_MARKER" <<'PY'
+          import json
+          import sys
+
+          data = json.loads(sys.argv[1])
+          expected_sha, expected_branch, marker = sys.argv[2:]
+          if data.get("baseRefName") != "main":
+              raise SystemExit("update PR has an unexpected base branch")
+          if data.get("headRefName") != expected_branch:
+              raise SystemExit("update PR has an unexpected head branch")
+          if data.get("headRefOid") != expected_sha:
+              raise SystemExit("update PR head changed unexpectedly")
+          if marker not in (data.get("body") or ""):
+              raise SystemExit("update PR marker is missing")
+          if data.get("isCrossRepository"):
+              raise SystemExit("update PR is not from this repository")
+          PY
+
+          changed_files="$(gh pr diff "$branch_pr" --repo "$GITHUB_REPOSITORY" --name-only)"
+          expected_files="$(printf '%s\n' ".github/workflows/docker-image.yml" "build.sh" "README.md" | sort)"
+          changed_files="$(printf '%s\n' "$changed_files" | sort)"
+          if [ "$changed_files" != "$expected_files" ]; then
+            echo "update PR contains unexpected files:" >&2
+            printf '%s\n' "$changed_files" >&2
+            exit 1
+          fi
+
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state=success \
+            -f context='Mihomo stable preflight' \
+            -f description="Candidate ${VERSION} passed the image validation workflow" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          # Merge only the exact branch and head commit created above.  Do not
+          # bypass branch protection; a conflict or required human review fails
+          # this run and leaves the PR for investigation.  GitHub can briefly
+          # report UNKNOWN immediately after PR creation, so retry that narrow
+          # propagation window before failing.
+          for attempt in $(seq 1 60); do
+            : "$attempt"
+            pr_state="$(gh pr view "$branch_pr" --repo "$GITHUB_REPOSITORY" --json mergeable,mergeStateStatus,mergedAt,mergeCommit)"
+            merged_sha="$(python3 - "$pr_state" <<'PY'
+          import json
+          import sys
+
+          data = json.loads(sys.argv[1])
+          print((data.get("mergeCommit") or {}).get("oid") or "")
+          PY
+            )"
+            if [ -n "$merged_sha" ]; then
+              echo "target_sha=${merged_sha}" >>"$GITHUB_OUTPUT"
+              echo "pr_number=${branch_pr}" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            merge_state="$(python3 - "$pr_state" <<'PY'
+          import json
+          import sys
+
+          data = json.loads(sys.argv[1])
+          print(data.get("mergeStateStatus") or "UNKNOWN")
+          PY
+            )"
+            if [ "$merge_state" = "CONFLICTING" ]; then
+              echo "update PR is conflicting; leaving it open for investigation" >&2
+              exit 1
+            fi
+
+            if [ "$merge_state" = "CLEAN" ] || [ "$merge_state" = "UNSTABLE" ]; then
+              gh pr merge "$branch_pr" \
+                --repo "$GITHUB_REPOSITORY" \
+                --squash \
+                --delete-branch \
+                --match-head-commit "$HEAD_SHA" || true
+            fi
+            sleep 5
+          done
+          echo "PR did not merge within the retry window" >&2
+          exit 1
+
+      - name: Finalize target commit
+        id: finalize
+        if: always()
+        env:
+          PREPARED_CHANGED: ${{ steps.prepare.outputs.changed }}
+          PREPARED_TARGET: ${{ steps.prepare.outputs.target_sha }}
+          MERGED_TARGET: ${{ steps.pr.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${PREPARED_CHANGED}" = "true" ]; then
+            test -n "${MERGED_TARGET}"
+            echo "target_sha=${MERGED_TARGET}" >>"$GITHUB_OUTPUT"
+          else
+            test -n "${PREPARED_TARGET}"
+            echo "target_sha=${PREPARED_TARGET}" >>"$GITHUB_OUTPUT"
+          fi
+
+  publish_update:
+    name: Publish updated image
+    needs:
+      - check
+      - propose
+    if: >-
+      always() &&
+      needs.check.outputs.update_needed == 'true' &&
+      needs.propose.result == 'success'
+    uses: ./.github/workflows/docker-image.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+      push_image: true
+      checkout_ref: ${{ needs.propose.outputs.target_sha }}
+    permissions:
+      contents: read
+      packages: write
+
+  publish_missing:
+    name: Repair missing image tags
+    needs: check
+    if: >-
+      needs.check.outputs.update_needed == 'false' &&
+      needs.check.outputs.publish_needed == 'true'
+    uses: ./.github/workflows/docker-image.yml
+    with:
+      version: ${{ needs.check.outputs.current }}
+      push_image: true
+      checkout_ref: ${{ needs.check.outputs.base_sha }}
+    permissions:
+      contents: read
+      packages: write

@@ -1,5 +1,10 @@
 name: Docker image
 
+run-name: >-
+  Docker image
+  ${{ inputs.version && format(' ({0})', inputs.version) || '' }}
+  ${{ (github.event_name == 'pull_request' || (inputs.invocation == 'reusable' && inputs.push_image == false) || (github.event_name == 'workflow_dispatch' && inputs.push_image == false)) && ' [validation]' || '' }}
+
 on:
   push:
     branches:
@@ -18,13 +23,33 @@ on:
         required: false
         default: true
         type: boolean
+  workflow_call:
+    inputs:
+      invocation:
+        description: "Internal marker for calls from the updater workflow."
+        required: false
+        default: reusable
+        type: string
+      version:
+        description: "Mihomo version without leading v. Leave blank to use the default."
+        required: false
+        type: string
+      push_image:
+        description: "Push the image to GitHub Container Registry."
+        required: false
+        default: false
+        type: boolean
+      checkout_ref:
+        description: "Commit or ref to label and build."
+        required: false
+        type: string
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: docker-image-${{ github.ref }}
+  group: docker-image-${{ github.ref }}-${{ inputs.invocation || github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -35,7 +60,11 @@ env:
 jobs:
   build:
     name: Build Docker image
-    runs-on: ubuntu-latest
+    # The updater performs the candidate build through workflow_call before it
+    # opens its PR.  Skipping the duplicate pull_request run avoids an
+    # approval-required run created by GITHUB_TOKEN.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.ref != 'automation/mihomo-stable'
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
@@ -50,14 +79,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.checkout_ref || '' }}
 
       - name: Resolve build settings
         id: build
         shell: bash
         env:
-          INPUT_PUSH_IMAGE: ${{ github.event.inputs.push_image }}
-          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_MODE: ${{ inputs.invocation || '' }}
+          INPUT_PUSH_IMAGE: ${{ inputs.push_image || github.event.inputs.push_image }}
+          INPUT_VERSION: ${{ inputs.version || github.event.inputs.version }}
         run: |
           set -euo pipefail
 
@@ -71,16 +103,27 @@ jobs:
           fi
           version="${version#v}"
 
-          push_image="true"
-          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
-            push_image="false"
-          elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${INPUT_PUSH_IMAGE}" = "false" ]; then
-            push_image="false"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unsupported Mihomo version: ${version}" >&2
+            exit 1
           fi
+
+          if [ "${INPUT_MODE}" = "reusable" ]; then
+            push_image="${INPUT_PUSH_IMAGE:-false}"
+          elif [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+              push_image="false"
+          elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            push_image="${INPUT_PUSH_IMAGE:-false}"
+          else
+              push_image="true"
+          fi
+
+          revision="$(git rev-parse HEAD)"
 
           {
             echo "version=${version}"
             echo "push_image=${push_image}"
+            echo "revision=${revision}"
             echo "tags<<EOF"
             echo "${IMAGE_NAME}:${version}${{ matrix.tag_suffix }}"
             if [ "${{ matrix.variant }}" = "standard" ]; then
@@ -90,21 +133,21 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         if: steps.build.outputs.push_image == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and publish image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ env.PLATFORMS }}
@@ -117,7 +160,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.build.outputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.build.outputs.revision }}
             org.opencontainers.image.description=Mihomo Docker image
           cache-from: type=gha
           cache-to: type=gha,mode=max
