@@ -52,3 +52,18 @@ but do not publish them.
 
 To change the Mihomo source version used by GitHub Actions, update
 `DEFAULT_MIHOMO_VERSION` in `.github/workflows/docker-image.yml`.
+
+## Automated stable updates
+
+`Update Mihomo stable release` checks the upstream stable release every day at
+03:17 UTC. When a newer release is available, it verifies the standard and
+compatible amd64 assets, prepares a version-update commit on the dedicated
+`automation/mihomo-stable` branch, and opens a PR. The updater only merges that
+exact branch and commit when repository rules allow it; conflicts, required
+reviews, or failed builds leave the PR open and fail the run for notification.
+After a successful merge it publishes both GHCR tags and `latest`. It also
+repairs missing or stale tags when the pinned version has not changed.
+
+The repository Actions setting `Allow GitHub Actions to create and approve pull
+requests` must be enabled once so the scheduled workflow can create its update
+PRs with `GITHUB_TOKEN`.
