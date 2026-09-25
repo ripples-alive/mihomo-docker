@@ -22,7 +22,7 @@ env:
 jobs:
   check:
     name: Check upstream release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -141,7 +141,7 @@ jobs:
       always() &&
       needs.check.outputs.update_needed == 'true' &&
       needs.validate.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write

@@ -64,7 +64,7 @@ jobs:
     # opens its PR.  Skipping the duplicate pull_request run avoids an
     # approval-required run created by GITHUB_TOKEN.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.ref != 'automation/mihomo-stable'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
