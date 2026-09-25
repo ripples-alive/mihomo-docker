@@ -289,7 +289,7 @@ jobs:
               --body "$body"
           fi
 
-          pr_json="$(gh pr view "$branch_pr" --repo "$GITHUB_REPOSITORY" --json baseRefName,headRefName,headRefOid,body,headRepository,baseRepository)"
+          pr_json="$(gh pr view "$branch_pr" --repo "$GITHUB_REPOSITORY" --json baseRefName,headRefName,headRefOid,body,isCrossRepository)"
           python3 - "$pr_json" "$HEAD_SHA" "$UPDATE_BRANCH" "$UPDATE_MARKER" <<'PY'
           import json
           import sys
@@ -304,9 +304,7 @@ jobs:
               raise SystemExit("update PR head changed unexpectedly")
           if marker not in (data.get("body") or ""):
               raise SystemExit("update PR marker is missing")
-          if (data.get("headRepository") or {}).get("fullName") != (
-              data.get("baseRepository") or {}
-          ).get("fullName"):
+          if data.get("isCrossRepository"):
               raise SystemExit("update PR is not from this repository")
           PY
 
