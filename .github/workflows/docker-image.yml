@@ -11,6 +11,10 @@ on:
       - main
     tags:
       - "v*"
+    # Keepalive commits update only this path and must not rebuild or publish
+    # an unchanged image. Tag pushes are still evaluated independently.
+    paths-ignore:
+      - ".github/keepalive/**"
   pull_request:
   workflow_dispatch:
     inputs:
