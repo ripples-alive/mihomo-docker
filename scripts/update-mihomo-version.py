@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Read and update the pinned Mihomo release version.
 
-The repository intentionally keeps the version in the workflow, local build
-script, and README examples.  This small helper keeps those copies in sync and
-fails closed if a future manual edit introduces drift.
+The canonical version lives in a regular repository file rather than a
+workflow file.  Keeping automated version commits away from
+``.github/workflows`` lets the repository's ``GITHUB_TOKEN`` push the update
+branch without requiring the unavailable ``workflows`` permission.
 """
 
 from __future__ import annotations
@@ -16,22 +17,13 @@ from pathlib import Path
 VERSION_PATTERN = r"\d+\.\d+\.\d+"
 VERSION_RE = re.compile(rf"^{VERSION_PATTERN}$")
 
-WORKFLOW = Path(".github/workflows/docker-image.yml")
+VERSION_FILE = Path("mihomo-version.txt")
 BUILD_SCRIPT = Path("build.sh")
 README = Path("README.md")
 
 
 def _read(root: Path, relative_path: Path) -> str:
     return (root / relative_path).read_text(encoding="utf-8")
-
-
-def _single_match(content: str, pattern: str, path: Path) -> str:
-    matches = re.findall(pattern, content, flags=re.MULTILINE)
-    if len(matches) != 1:
-        raise ValueError(
-            f"expected one version declaration in {path}, found {len(matches)}"
-        )
-    return matches[0]
 
 
 def _validate_version(version: str) -> tuple[int, int, int]:
@@ -41,35 +33,21 @@ def _validate_version(version: str) -> tuple[int, int, int]:
 
 
 def read_current(root: Path) -> str:
-    workflow = _read(root, WORKFLOW)
+    version = _read(root, VERSION_FILE).strip()
     build_script = _read(root, BUILD_SCRIPT)
     readme = _read(root, README)
 
-    workflow_version = _single_match(
-        workflow,
-        rf'^  DEFAULT_MIHOMO_VERSION: "({VERSION_PATTERN})"$',
-        WORKFLOW,
-    )
-    build_version = _single_match(
-        build_script,
-        rf"^MIHOMO_VERSION=({VERSION_PATTERN})$",
-        BUILD_SCRIPT,
-    )
-    _validate_version(workflow_version)
-    _validate_version(build_version)
-    if workflow_version != build_version:
-        raise ValueError(
-            "Mihomo version drift: "
-            f"{WORKFLOW}={workflow_version}, {BUILD_SCRIPT}={build_version}"
-        )
+    _validate_version(version)
+    if VERSION_FILE.name not in build_script:
+        raise ValueError(f"{BUILD_SCRIPT} does not read the canonical {VERSION_FILE}")
 
     readme_versions = set(re.findall(r"(?<!\d)\d+\.\d+\.\d+(?!\d)", readme))
-    if readme_versions != {workflow_version}:
+    if readme_versions != {version}:
         values = ", ".join(sorted(readme_versions)) or "none"
         raise ValueError(
-            f"Mihomo version drift in {README}: expected {workflow_version}, found {values}"
+            f"Mihomo version drift in {README}: expected {version}, found {values}"
         )
-    return workflow_version
+    return version
 
 
 def update(root: Path, new_version: str) -> bool:
@@ -83,31 +61,8 @@ def update(root: Path, new_version: str) -> bool:
     if new_version == current:
         return False
 
-    workflow_path = root / WORKFLOW
-    workflow = workflow_path.read_text(encoding="utf-8")
-    workflow, workflow_count = re.subn(
-        rf'(^  DEFAULT_MIHOMO_VERSION: "){re.escape(current)}("$)',
-        rf"\g<1>{new_version}\g<2>",
-        workflow,
-        count=1,
-        flags=re.MULTILINE,
-    )
-    if workflow_count != 1:
-        raise ValueError(f"failed to update {WORKFLOW}")
-    workflow_path.write_text(workflow, encoding="utf-8")
-
-    build_path = root / BUILD_SCRIPT
-    build_script = build_path.read_text(encoding="utf-8")
-    build_script, build_count = re.subn(
-        rf"(^MIHOMO_VERSION=){re.escape(current)}$",
-        rf"\g<1>{new_version}",
-        build_script,
-        count=1,
-        flags=re.MULTILINE,
-    )
-    if build_count != 1:
-        raise ValueError(f"failed to update {BUILD_SCRIPT}")
-    build_path.write_text(build_script, encoding="utf-8")
+    version_path = root / VERSION_FILE
+    version_path.write_text(f"{new_version}\n", encoding="utf-8")
 
     readme_path = root / README
     readme = readme_path.read_text(encoding="utf-8")
