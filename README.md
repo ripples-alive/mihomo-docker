@@ -52,8 +52,10 @@ Images are published on pushes to `main`, except pushes that change only
 not publish them. The scheduled keepalive commit only changes that excluded
 path, so it does not rebuild or publish an unchanged image.
 
-To change the Mihomo source version used by GitHub Actions, update
-`DEFAULT_MIHOMO_VERSION` in `.github/workflows/docker-image.yml`.
+To change the Mihomo source version used by local builds and GitHub Actions,
+update `mihomo-version.txt`. The automation intentionally keeps version
+updates out of `.github/workflows` so its built-in `GITHUB_TOKEN` can push the
+version branch without a separate workflow-file token.
 
 ## Automated stable updates
 

@@ -188,7 +188,7 @@ jobs:
           python3 scripts/update-mihomo-version.py --set "$VERSION"
           git diff --check
 
-          expected_files="$(printf '%s\n' ".github/workflows/docker-image.yml" "build.sh" "README.md" | sort)"
+          expected_files="$(printf '%s\n' "README.md" "mihomo-version.txt" | sort)"
           actual_files="$(git diff --name-only | sort)"
           if [ "$actual_files" != "$expected_files" ]; then
             echo "unexpected version diff:" >&2
@@ -198,7 +198,7 @@ jobs:
 
           git config user.name "ripples"
           git config user.email "ripples.alive@outlook.com"
-          git add .github/workflows/docker-image.yml build.sh README.md
+          git add README.md mihomo-version.txt
           git diff --cached --check
           git commit -m "chore: bump mihomo to ${VERSION}"
 
@@ -309,7 +309,7 @@ jobs:
           PY
 
           changed_files="$(gh pr diff "$branch_pr" --repo "$GITHUB_REPOSITORY" --name-only)"
-          expected_files="$(printf '%s\n' ".github/workflows/docker-image.yml" "build.sh" "README.md" | sort)"
+          expected_files="$(printf '%s\n' "README.md" "mihomo-version.txt" | sort)"
           changed_files="$(printf '%s\n' "$changed_files" | sort)"
           if [ "$changed_files" != "$expected_files" ]; then
             echo "update PR contains unexpected files:" >&2

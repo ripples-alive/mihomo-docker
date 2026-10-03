@@ -17,12 +17,15 @@ class UpdateMihomoVersionTests(unittest.TestCase):
     def make_checkout(self, readme: str = "image 1.2.3\n") -> Path:
         root = Path(tempfile.mkdtemp())
         (root / ".github/workflows").mkdir(parents=True)
-        (root / "scripts").mkdir()
         (root / ".github/workflows/docker-image.yml").write_text(
-            'env:\n  DEFAULT_MIHOMO_VERSION: "1.2.3"\n',
+            "workflow sentinel\n", encoding="utf-8"
+        )
+        (root / "scripts").mkdir()
+        (root / "mihomo-version.txt").write_text("1.2.3\n", encoding="utf-8")
+        (root / "build.sh").write_text(
+            "MIHOMO_VERSION=$(tr -d '\\r\\n' <\"mihomo-version.txt\")\n",
             encoding="utf-8",
         )
-        (root / "build.sh").write_text("MIHOMO_VERSION=1.2.3\n", encoding="utf-8")
         (root / "README.md").write_text(readme, encoding="utf-8")
         return root
 
@@ -30,11 +33,23 @@ class UpdateMihomoVersionTests(unittest.TestCase):
         root = self.make_checkout()
         self.assertEqual(MODULE.read_current(root), "1.2.3")
 
-    def test_updates_all_version_copies(self) -> None:
+    def test_updates_version_file_and_readme_only(self) -> None:
         root = self.make_checkout("image 1.2.3 and 1.2.3-compatible\n")
+        build_script = (root / "build.sh").read_text(encoding="utf-8")
+        workflow = (root / ".github/workflows/docker-image.yml").read_text(
+            encoding="utf-8"
+        )
         self.assertTrue(MODULE.update(root, "1.2.4"))
         self.assertEqual(MODULE.read_current(root), "1.2.4")
-        self.assertIn("1.2.4", (root / "build.sh").read_text(encoding="utf-8"))
+        self.assertEqual(
+            (root / "mihomo-version.txt").read_text(encoding="utf-8"),
+            "1.2.4\n",
+        )
+        self.assertEqual((root / "build.sh").read_text(encoding="utf-8"), build_script)
+        self.assertEqual(
+            (root / ".github/workflows/docker-image.yml").read_text(encoding="utf-8"),
+            workflow,
+        )
         self.assertNotIn("1.2.3", (root / "README.md").read_text(encoding="utf-8"))
 
     def test_same_version_is_idempotent(self) -> None:
